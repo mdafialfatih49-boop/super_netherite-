@@ -1,0 +1,541 @@
+name: Build Super Netherite
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buat semua file mod
+        run: |
+          cat > '.gitignore' <<'EOF_1'
+          .gradle/
+          build/
+          run/
+          .idea/
+          *.iml
+          EOF_1
+          cat > 'README.md' <<'EOF_2'
+          # Super Netherite & Piston Fusion (Fabric 1.20.1)
+
+          Susunan: sticky piston kiri dan kanan saling berhadapan, taruh block/mob di depan masing-masing piston, lalu tekan lever.
+
+          - 2 Netherite Block (tepat 2 sel di antara dua kepala piston) -> 1 **Super Netherite**
+          - Kuda + Sapi -> **Kuda Sapi** (kuda jinak berpelana, 60 HP, regenerasi)
+          - Domba + Ayam -> **Domba Ayam** (domba kuning, slow falling, lompat tinggi)
+          - Ocelot + Kucing -> **Kucing Ocelot** (kucing jinak, cepat, serangan 6)
+
+          ## Build
+          Upload folder ini ke GitHub, tab Actions -> Build -> unduh artifact `supernetherite-jar`.
+          Atau lokal: `gradle build` (Gradle 8.5, Java 17), jar ada di `build/libs/`.
+          EOF_2
+          cat > 'build.gradle' <<'EOF_3'
+          plugins {
+              id 'fabric-loom' version '1.5-SNAPSHOT'
+              id 'maven-publish'
+          }
+
+          version = project.mod_version
+          group = project.maven_group
+
+          base {
+              archivesName = project.archives_base_name
+          }
+
+          repositories {
+          }
+
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+          }
+
+          processResources {
+              inputs.property "version", project.version
+              filesMatching("fabric.mod.json") {
+                  expand "version": project.version
+              }
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              it.options.release = 17
+          }
+
+          java {
+              withSourcesJar()
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+          }
+          EOF_3
+          cat > 'gradle.properties' <<'EOF_4'
+          org.gradle.jvmargs=-Xmx2G
+          org.gradle.parallel=true
+
+          minecraft_version=1.20.1
+          yarn_mappings=1.20.1+build.10
+          loader_version=0.15.11
+
+          mod_version=1.0.0
+          maven_group=com.supernetherite
+          archives_base_name=supernetherite
+
+          fabric_version=0.92.2+1.20.1
+          EOF_4
+          cat > 'settings.gradle' <<'EOF_5'
+          pluginManagement {
+              repositories {
+                  maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          EOF_5
+          mkdir -p 'src/main/java/com/supernetherite'
+          cat > 'src/main/java/com/supernetherite/FusedMobs.java' <<'EOF_6'
+          package com.supernetherite;
+
+          import net.minecraft.entity.EntityType;
+          import net.minecraft.entity.LivingEntity;
+          import net.minecraft.entity.attribute.EntityAttribute;
+          import net.minecraft.entity.attribute.EntityAttributeInstance;
+          import net.minecraft.entity.attribute.EntityAttributes;
+          import net.minecraft.entity.effect.StatusEffectInstance;
+          import net.minecraft.entity.effect.StatusEffects;
+          import net.minecraft.entity.passive.CatEntity;
+          import net.minecraft.entity.passive.HorseEntity;
+          import net.minecraft.entity.passive.SheepEntity;
+          import net.minecraft.entity.player.PlayerEntity;
+          import net.minecraft.item.ItemStack;
+          import net.minecraft.item.Items;
+          import net.minecraft.server.world.ServerWorld;
+          import net.minecraft.text.Text;
+          import net.minecraft.util.DyeColor;
+
+          /** Mob hasil fusi: mob vanilla yang diberi nama khusus dan stat jauh lebih kuat. */
+          public final class FusedMobs {
+              private static final int FOREVER = 20 * 60 * 60 * 10;
+
+              @FunctionalInterface
+              public interface Spawner {
+                  void spawn(ServerWorld world, double x, double y, double z, float yaw, PlayerEntity owner);
+              }
+
+              private FusedMobs() {
+              }
+
+              private static void attr(LivingEntity entity, EntityAttribute attribute, double value) {
+                  EntityAttributeInstance instance = entity.getAttributeInstance(attribute);
+                  if (instance != null) {
+                      instance.setBaseValue(value);
+                  }
+              }
+
+              /** Kuda + Sapi = "Kuda Sapi": kuda jinak berpelana, darah tebal, cepat, dan meregenerasi diri. */
+              public static void spawnHorseCow(ServerWorld world, double x, double y, double z, float yaw, PlayerEntity owner) {
+                  HorseEntity horse = EntityType.HORSE.create(world);
+                  if (horse == null) {
+                      return;
+                  }
+                  horse.refreshPositionAndAngles(x, y, z, yaw, 0.0f);
+                  horse.setCustomName(Text.literal("Kuda Sapi"));
+                  horse.setCustomNameVisible(true);
+                  attr(horse, EntityAttributes.GENERIC_MAX_HEALTH, 60.0);
+                  attr(horse, EntityAttributes.GENERIC_MOVEMENT_SPEED, 0.38);
+                  attr(horse, EntityAttributes.HORSE_JUMP_STRENGTH, 1.0);
+                  horse.setHealth(60.0f);
+                  horse.setTame(true);
+                  if (owner != null) {
+                      horse.setOwnerUuid(owner.getUuid());
+                  }
+                  horse.getInventory().setStack(0, new ItemStack(Items.SADDLE));
+                  horse.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, FOREVER, 0, false, false));
+                  world.spawnEntity(horse);
+              }
+
+              /** Domba + Ayam = "Domba Ayam": domba kuning yang melayang pelan seperti ayam. */
+              public static void spawnSheepChicken(ServerWorld world, double x, double y, double z, float yaw, PlayerEntity owner) {
+                  SheepEntity sheep = EntityType.SHEEP.create(world);
+                  if (sheep == null) {
+                      return;
+                  }
+                  sheep.refreshPositionAndAngles(x, y, z, yaw, 0.0f);
+                  sheep.setCustomName(Text.literal("Domba Ayam"));
+                  sheep.setCustomNameVisible(true);
+                  sheep.setColor(DyeColor.YELLOW);
+                  attr(sheep, EntityAttributes.GENERIC_MAX_HEALTH, 40.0);
+                  attr(sheep, EntityAttributes.GENERIC_MOVEMENT_SPEED, 0.35);
+                  sheep.setHealth(40.0f);
+                  sheep.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOW_FALLING, FOREVER, 0, false, false));
+                  sheep.addStatusEffect(new StatusEffectInstance(StatusEffects.JUMP_BOOST, FOREVER, 1, false, false));
+                  world.spawnEntity(sheep);
+              }
+
+              /** Ocelot + Kucing = "Kucing Ocelot": kucing jinak yang cepat dan kuat menyerang. */
+              public static void spawnOcelotCat(ServerWorld world, double x, double y, double z, float yaw, PlayerEntity owner) {
+                  CatEntity cat = EntityType.CAT.create(world);
+                  if (cat == null) {
+                      return;
+                  }
+                  cat.refreshPositionAndAngles(x, y, z, yaw, 0.0f);
+                  cat.setCustomName(Text.literal("Kucing Ocelot"));
+                  cat.setCustomNameVisible(true);
+                  attr(cat, EntityAttributes.GENERIC_MAX_HEALTH, 30.0);
+                  attr(cat, EntityAttributes.GENERIC_MOVEMENT_SPEED, 0.42);
+                  attr(cat, EntityAttributes.GENERIC_ATTACK_DAMAGE, 6.0);
+                  cat.setHealth(30.0f);
+                  if (owner != null) {
+                      cat.setOwner(owner);
+                  } else {
+                      cat.setTamed(true);
+                  }
+                  cat.addStatusEffect(new StatusEffectInstance(StatusEffects.NIGHT_VISION, FOREVER, 0, false, false));
+                  world.spawnEntity(cat);
+              }
+          }
+          EOF_6
+          mkdir -p 'src/main/java/com/supernetherite'
+          cat > 'src/main/java/com/supernetherite/FusionManager.java' <<'EOF_7'
+          package com.supernetherite;
+
+          import net.minecraft.block.Block;
+          import net.minecraft.block.BlockState;
+          import net.minecraft.block.Blocks;
+          import net.minecraft.entity.EntityType;
+          import net.minecraft.entity.LivingEntity;
+          import net.minecraft.entity.player.PlayerEntity;
+          import net.minecraft.particle.ParticleTypes;
+          import net.minecraft.server.MinecraftServer;
+          import net.minecraft.server.world.ServerWorld;
+          import net.minecraft.sound.SoundCategory;
+          import net.minecraft.sound.SoundEvents;
+          import net.minecraft.state.property.Properties;
+          import net.minecraft.util.math.BlockPos;
+          import net.minecraft.util.math.Box;
+          import net.minecraft.util.math.Direction;
+
+          import java.util.ArrayList;
+          import java.util.Iterator;
+          import java.util.List;
+
+          /**
+           * Mendeteksi dua sticky piston yang saling berhadapan dan sama-sama sudah memanjang,
+           * lalu menggabungkan isi di antara kedua kepala piston.
+           */
+          public final class FusionManager {
+              /** Piston butuh 2 tick untuk memanjang; kita tunggu sedikit lebih lama supaya semuanya sudah diam. */
+              private static final int DELAY_TICKS = 6;
+              private static final int MAX_DISTANCE = 8;
+
+              private static final List<Pending> PENDING = new ArrayList<>();
+
+              private static final class Pending {
+                  final ServerWorld world;
+                  final BlockPos pos;
+                  final Direction dir;
+                  int ticks = DELAY_TICKS;
+
+                  Pending(ServerWorld world, BlockPos pos, Direction dir) {
+                      this.world = world;
+                      this.pos = pos;
+                      this.dir = dir;
+                  }
+              }
+
+              private record MobRecipe(EntityType<?> a, EntityType<?> b, FusedMobs.Spawner spawner) {
+              }
+
+              private static final List<MobRecipe> MOB_RECIPES = List.of(
+                      new MobRecipe(EntityType.HORSE, EntityType.COW, FusedMobs::spawnHorseCow),
+                      new MobRecipe(EntityType.SHEEP, EntityType.CHICKEN, FusedMobs::spawnSheepChicken),
+                      new MobRecipe(EntityType.OCELOT, EntityType.CAT, FusedMobs::spawnOcelotCat)
+              );
+
+              private FusionManager() {
+              }
+
+              public static void schedule(ServerWorld world, BlockPos pos, Direction dir) {
+                  BlockPos immutable = pos.toImmutable();
+                  for (Pending p : PENDING) {
+                      if (p.world == world && p.pos.equals(immutable)) {
+                          p.ticks = DELAY_TICKS;
+                          return;
+                      }
+                  }
+                  PENDING.add(new Pending(world, immutable, dir));
+              }
+
+              public static void tick(MinecraftServer server) {
+                  if (PENDING.isEmpty()) {
+                      return;
+                  }
+                  Iterator<Pending> it = PENDING.iterator();
+                  List<Pending> due = new ArrayList<>();
+                  while (it.hasNext()) {
+                      Pending p = it.next();
+                      if (--p.ticks <= 0) {
+                          due.add(p);
+                          it.remove();
+                      }
+                  }
+                  for (Pending p : due) {
+                      process(p.world, p.pos, p.dir);
+                  }
+              }
+
+              private static void process(ServerWorld world, BlockPos pos, Direction dir) {
+                  BlockState self = world.getBlockState(pos);
+                  if (!self.isOf(Blocks.STICKY_PISTON) || !self.get(Properties.EXTENDED)
+                          || self.get(Properties.FACING) != dir) {
+                      return;
+                  }
+
+                  // Cari kepala piston lawan yang menghadap ke arah kita.
+                  int j = -1;
+                  for (int i = 2; i <= MAX_DISTANCE; i++) {
+                      BlockState s = world.getBlockState(pos.offset(dir, i));
+                      if (s.isOf(Blocks.PISTON_HEAD) && s.get(Properties.FACING) == dir.getOpposite()) {
+                          j = i;
+                          break;
+                      }
+                  }
+                  if (j < 0) {
+                      return;
+                  }
+
+                  int gap = j - 2; // jumlah sel kosong/isi di antara dua kepala piston
+                  if (gap < 1) {
+                      return;
+                  }
+
+                  // 1) Fusi block: dua netherite block bersebelahan di antara dua kepala piston.
+                  if (gap == 2) {
+                      BlockPos first = pos.offset(dir, 2);
+                      BlockPos second = pos.offset(dir, 3);
+                      if (world.getBlockState(first).isOf(Blocks.NETHERITE_BLOCK)
+                              && world.getBlockState(second).isOf(Blocks.NETHERITE_BLOCK)) {
+                          world.setBlockState(second, Blocks.AIR.getDefaultState(), Block.NOTIFY_ALL);
+                          world.setBlockState(first, SuperNetheriteMod.SUPER_NETHERITE_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
+                          double cx = first.getX() + 0.5 + (dir.getOffsetX() * 0.5);
+                          double cy = first.getY() + 0.5 + (dir.getOffsetY() * 0.5);
+                          double cz = first.getZ() + 0.5 + (dir.getOffsetZ() * 0.5);
+                          effects(world, cx, cy, cz);
+                          return;
+                      }
+                  }
+
+                  // 2) Fusi mob: dua mob di dalam ruang antara dua kepala piston.
+                  Box box = new Box(pos.offset(dir, 2)).union(new Box(pos.offset(dir, j - 1)))
+                          .expand(0.3, 0.2, 0.3).stretch(0.0, 1.0, 0.0);
+                  List<LivingEntity> mobs = world.getEntitiesByClass(LivingEntity.class, box,
+                          e -> e.isAlive() && !(e instanceof PlayerEntity));
+                  if (mobs.size() < 2) {
+                      return;
+                  }
+
+                  for (MobRecipe recipe : MOB_RECIPES) {
+                      LivingEntity a = null;
+                      LivingEntity b = null;
+                      for (LivingEntity e : mobs) {
+                          if (a == null && e.getType() == recipe.a()) {
+                              a = e;
+                          } else if (b == null && e.getType() == recipe.b()) {
+                              b = e;
+                          }
+                      }
+                      if (a != null && b != null) {
+                          double x = (a.getX() + b.getX()) / 2.0;
+                          double y = Math.min(a.getY(), b.getY());
+                          double z = (a.getZ() + b.getZ()) / 2.0;
+                          float yaw = a.getYaw();
+                          PlayerEntity owner = world.getClosestPlayer(x, y, z, 24.0, false);
+                          a.discard();
+                          b.discard();
+                          recipe.spawner().spawn(world, x, y, z, yaw, owner);
+                          effects(world, x, y + 1.0, z);
+                          return;
+                      }
+                  }
+              }
+
+              private static void effects(ServerWorld world, double x, double y, double z) {
+                  world.spawnParticles(ParticleTypes.END_ROD, x, y, z, 40, 0.5, 0.5, 0.5, 0.15);
+                  world.spawnParticles(ParticleTypes.PORTAL, x, y, z, 60, 0.6, 0.6, 0.6, 0.5);
+                  world.playSound(null, x, y, z, SoundEvents.BLOCK_BEACON_ACTIVATE, SoundCategory.BLOCKS, 1.0f, 1.2f);
+                  world.playSound(null, x, y, z, SoundEvents.ENTITY_GENERIC_EXPLODE, SoundCategory.BLOCKS, 0.5f, 1.5f);
+              }
+          }
+          EOF_7
+          mkdir -p 'src/main/java/com/supernetherite'
+          cat > 'src/main/java/com/supernetherite/SuperNetheriteMod.java' <<'EOF_8'
+          package com.supernetherite;
+
+          import net.fabricmc.api.ModInitializer;
+          import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+          import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
+          import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
+          import net.fabricmc.fabric.api.object.builder.v1.block.FabricBlockSettings;
+          import net.minecraft.block.Block;
+          import net.minecraft.block.Blocks;
+          import net.minecraft.item.BlockItem;
+          import net.minecraft.item.ItemGroups;
+          import net.minecraft.registry.Registries;
+          import net.minecraft.registry.Registry;
+          import net.minecraft.util.Identifier;
+
+          public class SuperNetheriteMod implements ModInitializer {
+              public static final String MOD_ID = "supernetherite";
+
+              public static final Block SUPER_NETHERITE_BLOCK = new Block(
+                      FabricBlockSettings.copyOf(Blocks.NETHERITE_BLOCK).strength(80.0f, 2000.0f));
+
+              public static final BlockItem SUPER_NETHERITE_ITEM = new BlockItem(
+                      SUPER_NETHERITE_BLOCK, new FabricItemSettings().fireproof());
+
+              @Override
+              public void onInitialize() {
+                  Identifier id = new Identifier(MOD_ID, "super_netherite_block");
+                  Registry.register(Registries.BLOCK, id, SUPER_NETHERITE_BLOCK);
+                  Registry.register(Registries.ITEM, id, SUPER_NETHERITE_ITEM);
+
+                  ItemGroupEvents.modifyEntriesEvent(ItemGroups.BUILDING_BLOCKS)
+                          .register(entries -> entries.add(SUPER_NETHERITE_ITEM));
+
+                  ServerTickEvents.END_SERVER_TICK.register(FusionManager::tick);
+              }
+          }
+          EOF_8
+          mkdir -p 'src/main/java/com/supernetherite/mixin'
+          cat > 'src/main/java/com/supernetherite/mixin/PistonBlockMixin.java' <<'EOF_9'
+          package com.supernetherite.mixin;
+
+          import com.supernetherite.FusionManager;
+          import net.minecraft.block.BlockState;
+          import net.minecraft.block.Blocks;
+          import net.minecraft.block.PistonBlock;
+          import net.minecraft.server.world.ServerWorld;
+          import net.minecraft.state.property.Properties;
+          import net.minecraft.util.math.BlockPos;
+          import net.minecraft.world.World;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+          @Mixin(PistonBlock.class)
+          public class PistonBlockMixin {
+              @Inject(method = "onSyncedBlockEvent", at = @At("RETURN"))
+              private void supernetherite$afterEvent(BlockState state, World world, BlockPos pos, int type, int data,
+                                                     CallbackInfoReturnable<Boolean> cir) {
+                  // type 0 = piston mulai memanjang (extend)
+                  if (type == 0 && cir.getReturnValueZ() && world instanceof ServerWorld serverWorld
+                          && state.isOf(Blocks.STICKY_PISTON)) {
+                      FusionManager.schedule(serverWorld, pos, state.get(Properties.FACING));
+                  }
+              }
+          }
+          EOF_9
+          mkdir -p 'src/main/resources/assets/supernetherite/blockstates'
+          cat > 'src/main/resources/assets/supernetherite/blockstates/super_netherite_block.json' <<'EOF_10'
+          {"variants":{"":{"model":"supernetherite:block/super_netherite_block"}}}
+          EOF_10
+          mkdir -p 'src/main/resources/assets/supernetherite/lang'
+          cat > 'src/main/resources/assets/supernetherite/lang/en_us.json' <<'EOF_11'
+          {
+            "block.supernetherite.super_netherite_block": "Super Netherite"
+          }
+          EOF_11
+          mkdir -p 'src/main/resources/assets/supernetherite/lang'
+          cat > 'src/main/resources/assets/supernetherite/lang/id_id.json' <<'EOF_12'
+          {
+            "block.supernetherite.super_netherite_block": "Super Netherite"
+          }
+          EOF_12
+          mkdir -p 'src/main/resources/assets/supernetherite/models/block'
+          cat > 'src/main/resources/assets/supernetherite/models/block/super_netherite_block.json' <<'EOF_13'
+          {"parent":"minecraft:block/cube_all","textures":{"all":"supernetherite:block/super_netherite_block"}}
+          EOF_13
+          mkdir -p 'src/main/resources/assets/supernetherite/models/item'
+          cat > 'src/main/resources/assets/supernetherite/models/item/super_netherite_block.json' <<'EOF_14'
+          {"parent":"supernetherite:block/super_netherite_block"}
+          EOF_14
+          mkdir -p 'src/main/resources/assets/supernetherite/textures/block'
+          echo 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAACmUlEQVR4nHWRPWgUQQCFZ3Zm52d/bn/UYM7E26hgMJBoEy3UOgopDBYaEYmFKIgoiEoKwUZiJ6jgTwoRk1goWEgMYiWInRJLC4mIR7zLJuje7e7szO5aHAYbX/l4Dx7vg5u7ujnjOiFE16MoghAahhEnCdF1rOvtVsswDJFluVIQwkwKzak4TsV1bOftve6g1rel2jMsJ4KtwbtHNZOb27ft2KtOH9TOuo4X1Ppc14cPrw/ee4EIIVmWua57Ds6A/2vy+wF4sf/Bvo2jC/XZkeo4AGChPrtozg21j6+HPvEZ3/drPw4BAFxiw107B4blxEh1/HZ6tH91bKk6r5TK87z4K8/zNE1bW1uTUrqNAS2T8uvmVwv1WQDA1PQbpZSUkjEmhFBKmaaZJEkYhp7nMca+sfcaxjjP8098xjTNkQsrhmEwxuZuIMYYpZQQUhRFpVJJkqTjwKC3z3U8QgillFJalmUYhmVZdnV1lWUZRZFpmkVRIISEEMuNZc22bcMwbNtWSjUaDSEE5xxjrJQKw5AQEoZhq9VCCEkpc6UwhFBKCQCAEDqOE0URQohzLoToLEEIUUqFEGVZWpalCSEwxpxzAMD2n6O74/E8z5MkSdM0jmPbthFCURQVRWEYxoaVIXwIX/pQPG42mxjjDgpQBwCApep8UD/8OX/m+36WZQghCOGgvx8ODgxNeq/vqmPn8bNH6JRS6l/Yt36NWpal6/qZ4gkA4P6XqzDo7du4YdNl62WHMaWUc766uronOfGRPZ3059ebjLHf0S+4tSfwXX93PD41/WbsWpymqeu6nVsYY2ma7gyPLJpzAADLsporDVjt7qnYFaWUknJywr75uFWx7SRJOOdxHF85ye88B+12m1LajuNUpH8Ag4M4iAoeBs0AAAAASUVORK5CYII=' | base64 -d > 'src/main/resources/assets/supernetherite/textures/block/super_netherite_block.png'
+          mkdir -p 'src/main/resources/data/minecraft/tags/blocks/mineable'
+          cat > 'src/main/resources/data/minecraft/tags/blocks/mineable/pickaxe.json' <<'EOF_16'
+          {"replace":false,"values":["supernetherite:super_netherite_block"]}
+          EOF_16
+          mkdir -p 'src/main/resources/data/minecraft/tags/blocks'
+          cat > 'src/main/resources/data/minecraft/tags/blocks/needs_diamond_tool.json' <<'EOF_17'
+          {"replace":false,"values":["supernetherite:super_netherite_block"]}
+          EOF_17
+          mkdir -p 'src/main/resources/data/supernetherite/loot_tables/blocks'
+          cat > 'src/main/resources/data/supernetherite/loot_tables/blocks/super_netherite_block.json' <<'EOF_18'
+          {
+            "type": "minecraft:block",
+            "pools": [
+              {
+                "rolls": 1.0,
+                "bonus_rolls": 0.0,
+                "entries": [
+                  { "type": "minecraft:item", "name": "supernetherite:super_netherite_block" }
+                ],
+                "conditions": [
+                  { "condition": "minecraft:survives_explosion" }
+                ]
+              }
+            ]
+          }
+          EOF_18
+          mkdir -p 'src/main/resources'
+          cat > 'src/main/resources/fabric.mod.json' <<'EOF_19'
+          {
+            "schemaVersion": 1,
+            "id": "supernetherite",
+            "version": "${version}",
+            "name": "Super Netherite & Piston Fusion",
+            "description": "Gabungkan dua netherite block jadi Super Netherite, dan gabungkan mob (kuda+sapi, domba+ayam, ocelot+kucing) memakai dua sticky piston yang saling berhadapan.",
+            "authors": ["Kamu"],
+            "license": "CC0-1.0",
+            "environment": "*",
+            "entrypoints": {
+              "main": ["com.supernetherite.SuperNetheriteMod"]
+            },
+            "mixins": ["supernetherite.mixins.json"],
+            "depends": {
+              "fabricloader": ">=0.14.21",
+              "minecraft": "~1.20.1",
+              "java": ">=17",
+              "fabric-api": "*"
+            }
+          }
+          EOF_19
+          mkdir -p 'src/main/resources'
+          cat > 'src/main/resources/supernetherite.mixins.json' <<'EOF_20'
+          {
+            "required": true,
+            "minVersion": "0.8",
+            "package": "com.supernetherite.mixin",
+            "compatibilityLevel": "JAVA_17",
+            "mixins": [
+              "PistonBlockMixin"
+            ],
+            "injectors": {
+              "defaultRequire": 1
+            }
+          }
+          EOF_20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.5
+      - run: gradle build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supernetherite-jar
+          path: build/libs/supernetherite-*[0-9].jar
